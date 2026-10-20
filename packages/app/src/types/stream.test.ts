@@ -1440,6 +1440,90 @@ describe("stream reducer canonical tool calls", () => {
     assert.strictEqual(todos.items[0]?.text, "Task 1");
   });
 
+  it("hides a pi TodoWrite badge and ignores its merge-patch args", () => {
+    const hidden = hydrateStreamState([
+      {
+        event: canonicalToolTimeline({
+          provider: "pi",
+          callId: "pi-todo-run",
+          name: "TodoWrite",
+          status: "running",
+          input: {
+            merge: true,
+            todos: [{ id: "a", content: "Patch only", status: "pending" }],
+          },
+        }),
+        timestamp: new Date("2025-01-01T11:01:00Z"),
+      },
+      {
+        event: canonicalToolTimeline({
+          provider: "pi",
+          callId: "pi-todo-run",
+          name: "TodoWrite",
+          status: "completed",
+          input: {
+            merge: true,
+            todos: [{ id: "a", content: "Patch only", status: "completed" }],
+          },
+        }),
+        timestamp: new Date("2025-01-01T11:01:01Z"),
+      },
+      {
+        event: {
+          type: "timeline",
+          provider: "pi",
+          item: {
+            type: "todo",
+            items: [
+              { id: "a", text: "Ship it", status: "in_progress", completed: false },
+              { id: "b", text: "Write notes", status: "pending", completed: false },
+            ],
+          },
+        },
+        timestamp: new Date("2025-01-01T11:01:02Z"),
+      },
+    ]);
+
+    const hiddenTools = hidden.filter(isAgentToolCallItem);
+    const hiddenTodos = hidden.find(
+      (item): item is Extract<StreamItem, { kind: "todo_list" }> => item.kind === "todo_list",
+    );
+    assert.strictEqual(hiddenTools.length, 0);
+    assert.ok(hiddenTodos);
+    assert.deepStrictEqual(
+      hiddenTodos.items.map((item) => item.text),
+      ["Ship it", "Write notes"],
+    );
+    assert.strictEqual(
+      hiddenTodos.items.some((item) => item.activeForm !== undefined),
+      false,
+    );
+
+    const failed = hydrateStreamState([
+      {
+        event: canonicalToolTimeline({
+          provider: "pi",
+          callId: "pi-todo-fail",
+          name: "TodoWrite",
+          status: "failed",
+          input: {
+            merge: false,
+            todos: [{ id: "a", content: "Keep the old list", status: "pending" }],
+          },
+          error: "write failed",
+        }),
+        timestamp: new Date("2025-01-01T11:01:03Z"),
+      },
+    ]);
+    const failedTools = failed.filter(isAgentToolCallItem);
+    assert.strictEqual(failedTools.length, 1);
+    assert.strictEqual(failedTools[0]?.payload.data.status, "failed");
+    assert.strictEqual(
+      failed.some((item) => item.kind === "todo_list"),
+      false,
+    );
+  });
+
   it.each(["TaskCreate", "TaskUpdate", "TaskList"])(
     "suppresses Claude %s bookkeeping tool calls",
     (name) => {

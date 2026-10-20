@@ -1427,7 +1427,18 @@ function reduceTimelineToolCall(
     return state;
   }
 
-  const tasks = extractTaskEntriesFromToolCall(item.name, inputFromUnknownDetail(item.detail));
+  // pstack's TodoWrite args are a merge patch, and a failed call repeats the unchanged list.
+  // The canonical list arrives as a todo snapshot. A failed call still shows its tool card.
+  const piTodoWrite =
+    event.provider === "pi" &&
+    (normalizedToolName === "todowrite" || normalizedToolName === "todo_write");
+  if (piTodoWrite && item.status !== "failed") {
+    return state;
+  }
+
+  const tasks = piTodoWrite
+    ? null
+    : extractTaskEntriesFromToolCall(item.name, inputFromUnknownDetail(item.detail));
   if (tasks) {
     return appendTodoList(
       state,
