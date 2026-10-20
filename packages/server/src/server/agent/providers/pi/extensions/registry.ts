@@ -4,6 +4,7 @@ import { piMcpAdapter } from "./pi-mcp-adapter/index.js";
 import { rpivTodo } from "./rpiv-todo/index.js";
 import { piExampleTodo } from "./pi-example-todo/index.js";
 import { piGoalX } from "./pi-goal-x/index.js";
+import { pstack } from "./pstack/index.js";
 import { tintinwebPiSubagents } from "./tintinweb-pi-subagents/index.js";
 import { gotgenesPiSubagents } from "./gotgenes-pi-subagents/index.js";
 import { rpivAskUserQuestion } from "./rpiv-ask-user-question/index.js";
@@ -17,5 +18,6 @@ export const piExtensions = [
   rpivTodo,
   piExampleTodo,
   piGoalX,
+  pstack,
   rpivAskUserQuestion,
 ];

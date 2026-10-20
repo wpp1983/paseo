@@ -28,6 +28,8 @@ export interface PiExtensionToolMapping {
 export interface PiExtensionCustomMapping {
   subagents: ProviderSubagentInputEvent[];
   childSessions?: PiChildSessionFile[];
+  /** Parent-timeline facts, such as a todo snapshot carried by a custom message. */
+  timeline?: AgentTimelineItem[];
 }
 
 /**
