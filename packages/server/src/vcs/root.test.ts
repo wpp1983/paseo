@@ -1,9 +1,10 @@
 import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { findNearestVcsRoot } from "./root.js";
+import { findBlockingSvnDirectory, findNearestVcsRoot, selectVcsRoot } from "./root.js";
 
 function commandExists(name: string): boolean {
   try {
@@ -20,6 +21,52 @@ function run(command: string, args: string[], cwd?: string): void {
   execFileSync(command, args, { cwd, stdio: "ignore" });
 }
 
+describe("selectVcsRoot", () => {
+  test("uses svn when its root is closer than the git toplevel", () => {
+    expect(
+      selectVcsRoot({
+        cwd: resolve("/work/driver_project/src"),
+        gitToplevel: resolve("/work"),
+        svnRoot: resolve("/work/driver_project"),
+      }),
+    ).toEqual({ kind: "svn", root: resolve("/work/driver_project") });
+  });
+
+  test("uses git when its toplevel is closer than the svn root", () => {
+    expect(
+      selectVcsRoot({
+        cwd: resolve("/work/driver_project/vendor"),
+        gitToplevel: resolve("/work/driver_project/vendor"),
+        svnRoot: resolve("/work/driver_project"),
+      }),
+    ).toEqual({ kind: "git", root: resolve("/work/driver_project/vendor") });
+  });
+
+  test("keeps git when both roots are the same directory", () => {
+    const root = resolve("/work/both");
+    expect(
+      selectVcsRoot({
+        cwd: root,
+        gitToplevel: root,
+        svnRoot: root,
+      }),
+    ).toEqual({ kind: "git", root });
+  });
+
+  test("returns the only root that is present", () => {
+    const root = resolve("/work");
+    expect(selectVcsRoot({ cwd: root, gitToplevel: root, svnRoot: null })).toEqual({
+      kind: "git",
+      root,
+    });
+    expect(selectVcsRoot({ cwd: root, gitToplevel: null, svnRoot: root })).toEqual({
+      kind: "svn",
+      root,
+    });
+    expect(selectVcsRoot({ cwd: root, gitToplevel: null, svnRoot: null })).toBeNull();
+  });
+});
+
 describe("nearest VCS root", () => {
   let scratch = "";
 
@@ -31,6 +78,15 @@ describe("nearest VCS root", () => {
     if (scratch) {
       await rm(scratch, { recursive: true, force: true });
     }
+  });
+
+  test("finds an svn directory nested inside git without confirming it", async () => {
+    const gitRoot = join(scratch, "marker-git");
+    const svnDir = join(gitRoot, "driver_project");
+    await mkdir(join(gitRoot, ".git"), { recursive: true });
+    await mkdir(join(svnDir, ".svn"), { recursive: true });
+    expect(findBlockingSvnDirectory(join(svnDir, "src"))).toBe(svnDir);
+    expect(findBlockingSvnDirectory(gitRoot)).toBeNull();
   });
 
   test("returns null when no working copy exists", async () => {
@@ -59,7 +115,7 @@ describe("nearest VCS root", () => {
     beforeAll(() => {
       const repo = join(scratch, "svn-repo");
       run("svnadmin", ["create", repo]);
-      repoUrl = `file://${repo}`;
+      repoUrl = pathToFileURL(repo).href;
     });
 
     test("walks past a stray .svn directory to the parent git root", async () => {

@@ -37,29 +37,131 @@ interface CachedStatus {
   xml: string;
 }
 
-const statusXmlCache = new Map<string, CachedStatus>();
+interface CachedDiff {
+  statusDigest: string;
+  result: CheckoutDiffResult;
+}
+
+export interface SvnStatusCacheOptions {
+  now?: () => number;
+  ttlMs?: number;
+}
+
+export interface SvnStatusCache {
+  read(key: string, load: () => Promise<string>): Promise<string>;
+  clear(): void;
+}
+
+/**
+ * One in-flight `svn status` per root. The TTL starts when the command
+ * finishes: stamping it at launch made a multi-second status already expired
+ * by the time it was stored, so the diff in the same refresh ran it again.
+ */
+export function createSvnStatusCache(options: SvnStatusCacheOptions = {}): SvnStatusCache {
+  const ttlMs = options.ttlMs ?? STATUS_CACHE_MS;
+  const cached = new Map<string, CachedStatus>();
+  const inflight = new Map<string, Promise<string>>();
+  const now = options.now;
+
+  function currentTime(): number {
+    return now ? now() : Date.now();
+  }
+
+  function read(key: string, load: () => Promise<string>): Promise<string> {
+    const hit = cached.get(key);
+    if (hit && currentTime() - hit.at < ttlMs) {
+      return Promise.resolve(hit.xml);
+    }
+    const pending = inflight.get(key);
+    if (pending) {
+      return pending;
+    }
+    let tracked: Promise<string> | null = null;
+    const promise = load()
+      .then((xml) => {
+        cached.set(key, { at: currentTime(), xml });
+        return xml;
+      })
+      .finally(() => {
+        if (tracked !== null && inflight.get(key) === tracked) {
+          inflight.delete(key);
+        }
+      });
+    tracked = promise;
+    inflight.set(key, promise);
+    return promise;
+  }
+
+  function clear(): void {
+    cached.clear();
+    inflight.clear();
+  }
+
+  return { read, clear };
+}
+
+const statusCache = createSvnStatusCache();
+const identityByRoot = new Map<string, SvnWorkingCopy>();
+const diffByKey = new Map<string, CachedDiff>();
 
 export function clearSvnStatusCache(): void {
-  statusXmlCache.clear();
+  statusCache.clear();
+  identityByRoot.clear();
+  diffByKey.clear();
 }
 
 export async function readSvnStatusXml(root: string): Promise<string> {
-  const cached = statusXmlCache.get(root);
-  const now = Date.now();
-  if (cached && now - cached.at < STATUS_CACHE_MS) {
-    return cached.xml;
-  }
-  const xml = await runSvnCommand(
-    "svn",
-    ["status", "--non-interactive", "--ignore-externals", "--xml"],
-    { cwd: root, timeoutMs: STATUS_TIMEOUT_MS, maxBuffer: STATUS_MAX_BUFFER },
+  return statusCache.read(root, () =>
+    runSvnCommand("svn", ["status", "--non-interactive", "--ignore-externals", "--xml"], {
+      cwd: root,
+      timeoutMs: STATUS_TIMEOUT_MS,
+      maxBuffer: STATUS_MAX_BUFFER,
+    }),
   );
-  statusXmlCache.set(root, { at: now, xml });
-  return xml;
+}
+
+interface SvnRevisionInfo {
+  versionRaw: string;
+  infoXml: string;
+}
+
+/** Status XML from the same refresh. Null when `svn status` failed. */
+export interface SvnWorkingCopyRound {
+  workingCopy: SvnWorkingCopy;
+  statusXml: string | null;
 }
 
 export async function readSvnWorkingCopy(root: string): Promise<SvnWorkingCopy> {
-  const [versionRaw, infoXml, statusXml] = await Promise.all([
+  const round = await readSvnWorkingCopyRound(root);
+  return round.workingCopy;
+}
+
+export async function readSvnWorkingCopyRound(root: string): Promise<SvnWorkingCopyRound> {
+  const cached = identityByRoot.get(root);
+  if (cached) {
+    const statusXml = await readSvnStatusXml(root).catch(() => null);
+    if (statusXml === null || digestStatus(statusXml) === cached.statusDigest) {
+      return { workingCopy: cached, statusXml };
+    }
+    const revision = await loadRevisionAndInfo(root);
+    const workingCopy = assembleWorkingCopy(root, revision, statusXml);
+    identityByRoot.set(root, workingCopy);
+    return { workingCopy, statusXml };
+  }
+
+  const [statusXml, revision] = await Promise.all([
+    readSvnStatusXml(root).catch(() => null),
+    loadRevisionAndInfo(root),
+  ]);
+  const workingCopy = assembleWorkingCopy(root, revision, statusXml ?? "");
+  if (statusXml !== null) {
+    identityByRoot.set(root, workingCopy);
+  }
+  return { workingCopy, statusXml };
+}
+
+async function loadRevisionAndInfo(root: string): Promise<SvnRevisionInfo> {
+  const [versionRaw, infoXml] = await Promise.all([
     runSvnCommand("svnversion", [root], {
       cwd: root,
       timeoutMs: INFO_TIMEOUT_MS,
@@ -70,28 +172,78 @@ export async function readSvnWorkingCopy(root: string): Promise<SvnWorkingCopy> 
       timeoutMs: INFO_TIMEOUT_MS,
       maxBuffer: 1024 * 1024,
     }),
-    readSvnStatusXml(root).catch(() => ""),
   ]);
-  const info = parseSvnInfoXml(infoXml);
-  const fromVersion = formatSvnRevisionLabel(versionRaw);
+  return { versionRaw, infoXml };
+}
+
+function assembleWorkingCopy(
+  root: string,
+  revision: SvnRevisionInfo,
+  statusXml: string,
+): SvnWorkingCopy {
+  const info = parseSvnInfoXml(revision.infoXml);
+  const fromVersion = formatSvnRevisionLabel(revision.versionRaw);
   const fromInfo = info.revision ? formatSvnRevisionLabel(info.revision) : null;
   return {
     kind: "svn",
     root,
     label: fromVersion ?? fromInfo ?? "svn",
     url: info.url,
-    statusDigest: createHash("sha256").update(statusXml).digest("hex"),
+    statusDigest: digestStatus(statusXml),
   };
+}
+
+function digestStatus(xml: string): string {
+  return createHash("sha256").update(xml).digest("hex");
 }
 
 interface SvnDiffRead {
   root: string;
   ignoreWhitespace: boolean;
   includeStructured: boolean;
+  /** Status XML already read for this refresh. Skips a second `svn status`. */
+  statusXml?: string;
+}
+
+export function svnDiffStat(
+  files: readonly ParsedDiffFile[],
+): { additions: number; deletions: number } | null {
+  if (files.length === 0) {
+    return null;
+  }
+  let additions = 0;
+  let deletions = 0;
+  for (const file of files) {
+    additions += file.additions;
+    deletions += file.deletions;
+  }
+  return { additions, deletions };
 }
 
 export async function readSvnCheckoutDiff(input: SvnDiffRead): Promise<CheckoutDiffResult> {
-  const statusXml = await readSvnStatusXml(input.root);
+  const statusXml =
+    input.statusXml === undefined ? await readSvnStatusXml(input.root) : input.statusXml;
+  const statusDigest = digestStatus(statusXml);
+  const cacheKey = diffCacheKey(input);
+  const cached = diffByKey.get(cacheKey);
+  if (cached && cached.statusDigest === statusDigest) {
+    return cached.result;
+  }
+  const result = await readSvnCheckoutDiffUncached(input, statusXml);
+  diffByKey.set(cacheKey, { statusDigest, result });
+  return result;
+}
+
+function diffCacheKey(input: SvnDiffRead): string {
+  const whitespace = input.ignoreWhitespace ? "ws" : "exact";
+  const structured = input.includeStructured ? "structured" : "text";
+  return `${input.root}\0${whitespace}\0${structured}`;
+}
+
+async function readSvnCheckoutDiffUncached(
+  input: SvnDiffRead,
+  statusXml: string,
+): Promise<CheckoutDiffResult> {
   const entries = parseSvnStatusXml(statusXml);
   if (!input.includeStructured) {
     return { diff: "" };
