@@ -90,6 +90,21 @@ interface SvnDiffRead {
   includeStructured: boolean;
 }
 
+export function svnDiffStat(
+  files: readonly ParsedDiffFile[],
+): { additions: number; deletions: number } | null {
+  if (files.length === 0) {
+    return null;
+  }
+  let additions = 0;
+  let deletions = 0;
+  for (const file of files) {
+    additions += file.additions;
+    deletions += file.deletions;
+  }
+  return { additions, deletions };
+}
+
 export async function readSvnCheckoutDiff(input: SvnDiffRead): Promise<CheckoutDiffResult> {
   const statusXml = await readSvnStatusXml(input.root);
   const entries = parseSvnStatusXml(statusXml);

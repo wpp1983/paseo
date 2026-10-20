@@ -37,8 +37,18 @@ import type {
 } from "../services/forge-service.js";
 import { createForgeService } from "../services/forge-registry.js";
 import { loadCheckoutDiff } from "../vcs/checkout-diff.js";
-import { findNearestVcsRoot } from "../vcs/root.js";
-import { readSvnWorkingCopy, type SvnWorkingCopy } from "../vcs/svn.js";
+import {
+  findBlockingSvnDirectory,
+  findNearestVcsRoot,
+  selectVcsRoot,
+  type VcsRoot,
+} from "../vcs/root.js";
+import {
+  readSvnCheckoutDiff,
+  readSvnWorkingCopy,
+  svnDiffStat,
+  type SvnWorkingCopy,
+} from "../vcs/svn.js";
 import {
   createForgeResolver,
   type ForgeResolution,
@@ -1329,6 +1339,14 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
     if (target.latestFacts) {
       return target.latestFacts;
     }
+    if (findBlockingSvnDirectory(target.cwd) !== null) {
+      const selected = await this.selectWorkspaceVcs(target.cwd);
+      if (selected?.kind === "svn") {
+        const facts: CheckoutSnapshotFacts = { isGit: false };
+        target.latestFacts = facts;
+        return facts;
+      }
+    }
     return this.loadCheckoutFacts(target, {
       paseoHome: this.paseoHome,
       logger: this.logger,
@@ -2140,6 +2158,32 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
   }
 
   private async resolveCheckoutWatchRoot(cwd: string): Promise<string | null> {
+    if (findBlockingSvnDirectory(cwd) !== null) {
+      const selected = await this.selectWorkspaceVcs(cwd);
+      if (selected?.kind === "svn") {
+        // Poll SVN status instead of subscribing to the parent git toplevel.
+        // A recursive git watch inventories that parent and the Changes panel
+        // lists its files.
+        return null;
+      }
+    }
+    return this.readGitToplevel(cwd);
+  }
+
+  private async selectWorkspaceVcs(cwd: string): Promise<VcsRoot | null> {
+    const nearest = await findNearestVcsRoot(cwd);
+    if (nearest?.kind !== "svn") {
+      return nearest;
+    }
+    const gitToplevel = await this.readGitToplevel(cwd);
+    return selectVcsRoot({
+      cwd,
+      gitToplevel,
+      svnRoot: nearest.root,
+    });
+  }
+
+  private async readGitToplevel(cwd: string): Promise<string | null> {
     try {
       const { stdout } = await this.deps.runGitCommand(["rev-parse", "--show-toplevel"], {
         cwd,
@@ -3253,6 +3297,15 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
     request: WorkspaceGitRefreshRequest,
     runRefreshGitCommand: RunGitCommand,
   ): Promise<WorkspaceGitRuntimeSnapshot> {
+    if (findBlockingSvnDirectory(target.cwd) !== null) {
+      const selected = await this.selectWorkspaceVcs(target.cwd);
+      if (selected?.kind === "svn") {
+        // SVN is the nearer working copy. Git status would describe an ancestor
+        // repository and the Changes panel would list that repository's files.
+        return this.refreshSvnWorkspaceSnapshot(target, selected);
+      }
+    }
+
     let facts = target.latestFacts;
     if (request.movedRemoteRefs.size > 0 && !request.refreshStructure && !request.refreshWorktree) {
       if (facts?.isGit && target.latestGit?.isGit) {
@@ -3297,6 +3350,37 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
     return this.finishSnapshot(target);
   }
 
+  private async refreshSvnWorkspaceSnapshot(
+    target: WorkspaceGitTarget,
+    selected: VcsRoot,
+  ): Promise<WorkspaceGitRuntimeSnapshot> {
+    await this.writeVcsIdentity(target, selected.root);
+    target.lastShellOutAtMs = this.deps.now().getTime();
+    target.latestFacts = { isGit: false };
+    const root = target.latestVcs?.root ?? selected.root;
+    let diffStat: WorkspaceGitRuntimeSnapshot["git"]["diffStat"] = null;
+    try {
+      const diff = await readSvnCheckoutDiff({
+        root,
+        ignoreWhitespace: false,
+        includeStructured: true,
+      });
+      diffStat = svnDiffStat(diff.structured ?? []);
+    } catch (error) {
+      this.logger.warn({ err: error, cwd: target.cwd }, "Failed to read SVN diff");
+    }
+    const loadedAtMs = this.deps.now().getTime();
+    target.latestGit = {
+      ...buildNotGitSnapshot(target.cwd).git,
+      diffStat,
+    };
+    target.latestGitLoadedAtMs = loadedAtMs;
+    target.latestForge = buildForgeUnavailableSnapshot();
+    target.latestForgeLoadedAtMs = loadedAtMs;
+    target.latestSnapshotLoadedAtMs = loadedAtMs;
+    return this.combineSnapshot(target);
+  }
+
   private async finishSnapshot(target: WorkspaceGitTarget): Promise<WorkspaceGitRuntimeSnapshot> {
     await this.refreshVcsIdentity(target);
     target.latestSnapshotLoadedAtMs = this.deps.now().getTime();
@@ -3309,13 +3393,17 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
       target.latestVcs = null;
       return;
     }
+    await this.writeVcsIdentity(target, nearest.root);
+  }
+
+  private async writeVcsIdentity(target: WorkspaceGitTarget, svnRoot: string): Promise<void> {
     try {
-      target.latestVcs = await readSvnWorkingCopy(nearest.root);
+      target.latestVcs = await readSvnWorkingCopy(svnRoot);
     } catch (error) {
       this.logger.warn({ err: error, cwd: target.cwd }, "Failed to read SVN working copy");
       target.latestVcs = {
         kind: "svn",
-        root: nearest.root,
+        root: svnRoot,
         label: "svn",
         url: null,
         statusDigest: "",
