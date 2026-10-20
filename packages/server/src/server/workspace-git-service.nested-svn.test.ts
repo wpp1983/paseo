@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import pino from "pino";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { clearSvnStatusCache } from "../vcs/svn.js";
@@ -74,7 +75,7 @@ describe.skipIf(!hasSvn)("svn working copy nested in a git repo", () => {
     await writeFile(join(gitRoot, "parent-only.txt"), "from parent\n");
 
     run("svnadmin", ["create", repo]);
-    run("svn", ["checkout", `file://${repo}`, wc]);
+    run("svn", ["checkout", pathToFileURL(repo).href, wc]);
     await mkdir(join(wc, "src"));
     await writeFile(join(wc, "src", "kept.txt"), "one\n");
     run("svn", ["add", "src"], wc);

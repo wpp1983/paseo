@@ -46,6 +46,7 @@ import {
 import {
   readSvnCheckoutDiff,
   readSvnWorkingCopy,
+  readSvnWorkingCopyRound,
   svnDiffStat,
   type SvnWorkingCopy,
 } from "../vcs/svn.js";
@@ -106,6 +107,23 @@ const DEGRADED_GIT_POLL_INTERVAL_MS = 5_000;
 // does not. Explicit reads still force a refresh, so this only bounds background discovery of
 // changes made outside Paseo.
 const DEGRADED_GIT_POLL_MAX_INTERVAL_MS = 60_000;
+
+interface WorkingTreePollSchedule {
+  baseIntervalMs: number;
+  maxIntervalMs: number;
+}
+
+const GIT_POLL_SCHEDULE: WorkingTreePollSchedule = {
+  baseIntervalMs: DEGRADED_GIT_POLL_INTERVAL_MS,
+  maxIntervalMs: DEGRADED_GIT_POLL_MAX_INTERVAL_MS,
+};
+// `svn status` on a large working copy takes several seconds. A quiet tree
+// does not need the Git 5s cadence: poll at 15s and back off to 60s. The next
+// timer is still armed only after the tick finishes, so ticks do not overlap.
+const SVN_POLL_SCHEDULE: WorkingTreePollSchedule = {
+  baseIntervalMs: 15_000,
+  maxIntervalMs: DEGRADED_GIT_POLL_MAX_INTERVAL_MS,
+};
 // A dependency install creates directories for minutes. Collapse the burst into
 // a couple of `git ls-files` runs rather than one per event.
 const WORKING_TREE_IGNORE_REFRESH_QUIET_MS = 300;
@@ -1422,7 +1440,7 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
     // directories as a single row.
     const nearest = repoRoot === null ? await findNearestVcsRoot(cwd) : null;
     if (nearest?.kind === "svn") {
-      this.startWorkingTreeWatchFallback(target, "not_a_git_checkout");
+      this.startWorkingTreeWatchFallback(target, "not_a_git_checkout", SVN_POLL_SCHEDULE);
       return target;
     }
     await this.startWorkingTreeSubscription(target);
@@ -1624,11 +1642,11 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
     }
   }
 
-  private degradedPollDelayMs(quietTickCount: number): number {
-    return Math.min(
-      DEGRADED_GIT_POLL_MAX_INTERVAL_MS,
-      DEGRADED_GIT_POLL_INTERVAL_MS * 2 ** quietTickCount,
-    );
+  private degradedPollDelayMs(
+    quietTickCount: number,
+    schedule: WorkingTreePollSchedule = GIT_POLL_SCHEDULE,
+  ): number {
+    return Math.min(schedule.maxIntervalMs, schedule.baseIntervalMs * 2 ** quietTickCount);
   }
 
   // A refresh that throws is swallowed by refreshWorkspaceTarget and leaves the fingerprint
@@ -1646,6 +1664,7 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
   private startWorkingTreeWatchFallback(
     target: WorkingTreeWatchTarget,
     reason: WorkingTreeWatchFallbackReason,
+    schedule: WorkingTreePollSchedule = GIT_POLL_SCHEDULE,
   ): void {
     if (this.disposed || target.closed || target.fallbackPolling) {
       return;
@@ -1688,18 +1707,18 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
           : target.fallbackPollQuietTickCount + 1;
         target.fallbackPollTimer = setTimeout(
           poll,
-          this.degradedPollDelayMs(target.fallbackPollQuietTickCount),
+          this.degradedPollDelayMs(target.fallbackPollQuietTickCount, schedule),
         );
       } else {
         target.fallbackPolling = false;
       }
     };
-    target.fallbackPollTimer = setTimeout(poll, DEGRADED_GIT_POLL_INTERVAL_MS);
+    target.fallbackPollTimer = setTimeout(poll, schedule.baseIntervalMs);
     this.logger.warn(
       {
         cwd,
-        intervalMs: DEGRADED_GIT_POLL_INTERVAL_MS,
-        maxIntervalMs: DEGRADED_GIT_POLL_MAX_INTERVAL_MS,
+        intervalMs: schedule.baseIntervalMs,
+        maxIntervalMs: schedule.maxIntervalMs,
         reason,
       },
       "Working tree watcher unavailable; using bounded polling fallback",
@@ -3354,20 +3373,42 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
     target: WorkspaceGitTarget,
     selected: VcsRoot,
   ): Promise<WorkspaceGitRuntimeSnapshot> {
-    await this.writeVcsIdentity(target, selected.root);
     target.lastShellOutAtMs = this.deps.now().getTime();
     target.latestFacts = { isGit: false };
-    const root = target.latestVcs?.root ?? selected.root;
+    const root = selected.root;
     let diffStat: WorkspaceGitRuntimeSnapshot["git"]["diffStat"] = null;
+    let diffStatusXml: string | undefined;
+    let statusFailed = false;
     try {
-      const diff = await readSvnCheckoutDiff({
-        root,
-        ignoreWhitespace: false,
-        includeStructured: true,
-      });
-      diffStat = svnDiffStat(diff.structured ?? []);
+      const round = await readSvnWorkingCopyRound(root);
+      target.latestVcs = round.workingCopy;
+      if (round.statusXml === null) {
+        statusFailed = true;
+      } else {
+        diffStatusXml = round.statusXml;
+      }
     } catch (error) {
-      this.logger.warn({ err: error, cwd: target.cwd }, "Failed to read SVN diff");
+      this.logger.warn({ err: error, cwd: target.cwd }, "Failed to read SVN working copy");
+      target.latestVcs = {
+        kind: "svn",
+        root,
+        label: "svn",
+        url: null,
+        statusDigest: "",
+      };
+    }
+    if (!statusFailed) {
+      try {
+        const diff = await readSvnCheckoutDiff({
+          root,
+          ignoreWhitespace: false,
+          includeStructured: true,
+          ...(diffStatusXml === undefined ? {} : { statusXml: diffStatusXml }),
+        });
+        diffStat = svnDiffStat(diff.structured ?? []);
+      } catch (error) {
+        this.logger.warn({ err: error, cwd: target.cwd }, "Failed to read SVN diff");
+      }
     }
     const loadedAtMs = this.deps.now().getTime();
     target.latestGit = {

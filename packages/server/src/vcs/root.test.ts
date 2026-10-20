@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { findBlockingSvnDirectory, findNearestVcsRoot, selectVcsRoot } from "./root.js";
 
@@ -114,7 +115,7 @@ describe("nearest VCS root", () => {
     beforeAll(() => {
       const repo = join(scratch, "svn-repo");
       run("svnadmin", ["create", repo]);
-      repoUrl = `file://${repo}`;
+      repoUrl = pathToFileURL(repo).href;
     });
 
     test("walks past a stray .svn directory to the parent git root", async () => {

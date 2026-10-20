@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "vitest";
 import { loadCheckoutDiff } from "./checkout-diff.js";
 import { clearSvnStatusCache, readSvnCheckoutDiff, readSvnWorkingCopy } from "./svn.js";
@@ -31,7 +32,7 @@ describe.skipIf(!hasSvn)("svn checkout diff", () => {
     wc = join(scratch, "wc");
     const other = join(scratch, "other");
     run("svnadmin", ["create", repo]);
-    const url = `file://${repo}`;
+    const url = pathToFileURL(repo).href;
     run("svn", ["checkout", url, wc]);
     await mkdir(join(wc, "src"), { recursive: true });
     await writeFile(join(wc, "src", "kept.txt"), "one\n");
@@ -192,7 +193,7 @@ describe.skipIf(!hasSvn)("svn checkout diff", () => {
     const nestedSvn = join(gitRoot, "vendor");
     await mkdir(gitRoot);
     run("git", ["init"], gitRoot);
-    run("svn", ["checkout", `file://${join(scratch, "repo")}`, nestedSvn]);
+    run("svn", ["checkout", pathToFileURL(join(scratch, "repo")).href, nestedSvn]);
     const calls: string[] = [];
     await loadCheckoutDiff({
       cwd: gitRoot,
