@@ -202,7 +202,7 @@ export function useWorkspaceCommandCenterActions(): void {
     supportsSetupObservation,
   );
   const { overrides } = useKeyboardShortcutOverrides();
-  const { gitActions, isGit } = useGitActions({
+  const { gitActions, isGit, showsChanges } = useGitActions({
     serverId: serverId ?? "",
     cwd: cwd ?? "",
     icons: GIT_ACTION_ICONS,
@@ -286,6 +286,7 @@ export function useWorkspaceCommandCenterActions(): void {
           canSplitPanes: supportsDesktopPaneSplits() && !isCompact,
           canOpenBrowserTabs: getIsElectron(),
           isGit,
+          showsChanges,
           canPin,
           canShowSetup,
         },
@@ -317,6 +318,7 @@ export function useWorkspaceCommandCenterActions(): void {
       isCompact,
       isGit,
       isPinned,
+      showsChanges,
       keyboardActionDispatcher,
       labelCatalog,
       overrides,

@@ -9,6 +9,7 @@ import {
   useReviewAttachmentSnapshot,
   useReviewFeedback,
 } from "@/review";
+import { resolveChangesCheckout } from "@/git/changes-checkout";
 import { useCheckoutDiffQuery } from "@/git/use-diff-query";
 import { useCheckoutStatusQuery } from "@/git/use-status-query";
 import { useWorkingDiffComparison } from "@/git/working-diff-comparison";
@@ -38,16 +39,16 @@ export function useWorkingDiff({
     isError: isStatusError,
     error: statusError,
   } = useCheckoutStatusQuery({ serverId, cwd });
-  const gitStatus = status && status.isGit ? status : null;
-  const isGit = Boolean(gitStatus);
-  const notGit = status !== null && !status.isGit && !status.error;
+  const checkout = resolveChangesCheckout(status);
+  const gitStatus = checkout.kind === "git" && status?.isGit ? status : null;
+  const isGit = checkout.kind === "git";
+  const notGit = checkout.kind === "none" && status !== null && !status.error;
   const statusErrorMessage =
     status?.error?.message ??
     (isStatusError && statusError instanceof Error ? statusError.message : null);
   const baseRef = gitStatus?.baseRef ?? undefined;
   const hasUncommittedChanges = Boolean(gitStatus?.isDirty);
-  const currentBranchName =
-    gitStatus?.currentBranch && gitStatus.currentBranch !== "HEAD" ? gitStatus.currentBranch : null;
+  const currentBranchName = checkout.label;
 
   const { comparison: diffMode, selectComparison } = useWorkingDiffComparison({
     serverId,
@@ -55,6 +56,7 @@ export function useWorkingDiff({
     cwd,
     isDirty: hasUncommittedChanges,
   });
+  const diffModeForQuery = checkout.readOnly ? "uncommitted" : diffMode;
   const selectUncommitted = useCallback(() => selectComparison("uncommitted"), [selectComparison]);
   const selectBase = useCallback(() => selectComparison("base"), [selectComparison]);
 
@@ -66,10 +68,10 @@ export function useWorkingDiff({
   } = useCheckoutDiffQuery({
     serverId,
     cwd,
-    mode: diffMode,
+    mode: diffModeForQuery,
     baseRef,
     ignoreWhitespace,
-    enabled: enabled && isGit,
+    enabled: enabled && checkout.kind !== "none",
     queryScope,
   });
   const reviewDraftKey = useMemo(
@@ -78,18 +80,18 @@ export function useWorkingDiff({
         serverId,
         workspaceId,
         cwd,
-        mode: diffMode,
+        mode: diffModeForQuery,
         baseRef,
         ignoreWhitespace,
       }),
-    [baseRef, cwd, diffMode, ignoreWhitespace, serverId, workspaceId],
+    [baseRef, cwd, diffModeForQuery, ignoreWhitespace, serverId, workspaceId],
   );
   const reviewActions = useInlineReviewController({ reviewDraftKey, presentation });
   const reviewAttachment = useReviewAttachmentSnapshot({
     key: reviewDraftKey,
     diffFiles: files,
     cwd,
-    mode: diffMode,
+    mode: diffModeForQuery,
     baseRef,
   });
 
@@ -102,13 +104,14 @@ export function useWorkingDiff({
 
   return {
     status,
+    checkout,
     isStatusLoading,
     isGit,
     notGit,
     statusErrorMessage,
     baseRef,
     currentBranchName,
-    diffMode,
+    diffMode: diffModeForQuery,
     selectUncommitted,
     selectBase,
     files,

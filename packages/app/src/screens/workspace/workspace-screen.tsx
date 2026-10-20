@@ -621,6 +621,7 @@ interface WorkspaceHeaderFields {
   workspaceHeaderSubtitle: string;
   isWorkspaceHeaderSubtitleDistinct: boolean;
   isGitCheckout: boolean;
+  showsChanges: boolean;
   currentBranchName: string | null;
 }
 
@@ -640,6 +641,7 @@ function buildWorkspaceHeaderCheckoutState(input: {
     checkout: {
       isGit: input.data.isGit,
       currentBranch: input.data.currentBranch,
+      vcsLabel: input.data.vcs?.kind === "svn" ? input.data.vcs.label : null,
     },
   };
 }
@@ -656,6 +658,7 @@ function deriveWorkspaceHeaderFields(input: {
       workspaceHeaderSubtitle: "",
       isWorkspaceHeaderSubtitleDistinct: false,
       isGitCheckout: false,
+      showsChanges: false,
       currentBranchName: null,
     };
   }
@@ -665,6 +668,7 @@ function deriveWorkspaceHeaderFields(input: {
     workspaceHeaderSubtitle: renderState.subtitle,
     isWorkspaceHeaderSubtitleDistinct: renderState.isSubtitleDistinct,
     isGitCheckout: renderState.isGitCheckout,
+    showsChanges: renderState.showsChanges,
     currentBranchName: renderState.currentBranchName,
   };
 }
@@ -1250,6 +1254,7 @@ function WorkspaceScreenContent({
     workspaceHeaderSubtitle,
     isWorkspaceHeaderSubtitleDistinct,
     isGitCheckout,
+    showsChanges,
     currentBranchName,
   } = deriveWorkspaceHeaderFields({
     workspace: workspaceDescriptor,
@@ -2623,7 +2628,7 @@ function WorkspaceScreenContent({
           handleCreateBrowserTab({ paneId });
           return true;
         case "workspace.tab.target.changes":
-          if (persistenceKey && isGitCheckout) {
+          if (persistenceKey && showsChanges) {
             openExplorerSidebarView({
               isCompact: isMobile,
               workspaceKey: persistenceKey,
@@ -2648,9 +2653,9 @@ function WorkspaceScreenContent({
       focusedPaneTabState.pane?.id,
       handleCreateBrowserTab,
       handleCreateDraftTab,
-      isGitCheckout,
       isMobile,
       persistenceKey,
+      showsChanges,
     ],
   );
 
@@ -3281,7 +3286,7 @@ function WorkspaceScreenContent({
   const showCreateBrowserTab = getIsElectron();
   const newTabLauncher = useMemo<NewTabLauncher>(
     () => ({
-      showChanges: isGitCheckout,
+      showChanges: showsChanges,
       showPullRequest: hasPullRequest,
       showBrowser: showCreateBrowserTab,
       terminalDisabled: createTerminalDisabled,
@@ -3290,8 +3295,8 @@ function WorkspaceScreenContent({
     [
       createTerminalDisabled,
       hasPullRequest,
-      isGitCheckout,
       launchWorkspaceTab,
+      showsChanges,
       showCreateBrowserTab,
     ],
   );

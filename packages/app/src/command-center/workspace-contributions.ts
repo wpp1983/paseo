@@ -113,6 +113,8 @@ export interface WorkspaceCommandCenterSource {
     canSplitPanes: boolean;
     canOpenBrowserTabs: boolean;
     isGit: boolean;
+    /** Git checkout or SVN working copy. Pull requests stay git-only. */
+    showsChanges: boolean;
     /** Host supports the `workspacePinning` feature. */
     canPin: boolean;
     /** The workspace has setup commands or a setup error — same gate as the header menu. */
@@ -217,7 +219,8 @@ function buildPanelContributions(
     },
   ];
   for (const [index, panel] of panelTargets.entries()) {
-    if (panel.target !== "files" && !source.capabilities.isGit) continue;
+    if (panel.target === "changes" && !source.capabilities.showsChanges) continue;
+    if (panel.target === "pull-request" && !source.capabilities.isGit) continue;
     contributions.push(
       buildQueryAction(source, {
         id: `tab:open:${panel.target}`,

@@ -82,6 +82,7 @@ function source(gitActions: GitActions): {
         canSplitPanes: true,
         canOpenBrowserTabs: true,
         isGit: false,
+        showsChanges: false,
         canPin: false,
         canShowSetup: false,
       },
@@ -184,6 +185,7 @@ describe("workspace command center contributions", () => {
       canSplitPanes: false,
       canOpenBrowserTabs: false,
       isGit: false,
+      showsChanges: false,
       canPin: false,
       canShowSetup: false,
     };
@@ -196,6 +198,21 @@ describe("workspace command center contributions", () => {
     expect(contributions.some((item) => item.id.startsWith("pane:"))).toBe(false);
     expect(contributions.some((item) => item.id === "workspace:rename")).toBe(true);
     expect(contributions.some((item) => item.id === "workspace:copy-path")).toBe(true);
+    expect(contributions.some((item) => item.id === "tab:open:changes")).toBe(false);
+  });
+
+  it("opens Changes for an SVN working copy and keeps pull requests git-only", () => {
+    const fixture = source({ primary: null, secondary: [], menu: [] });
+    fixture.value.capabilities = {
+      ...fixture.value.capabilities,
+      isGit: false,
+      showsChanges: true,
+    };
+
+    const contributions = buildWorkspaceCommandCenterContributions(fixture.value);
+
+    expect(contributions.some((item) => item.id === "tab:open:changes")).toBe(true);
+    expect(contributions.some((item) => item.id === "tab:open:pull-request")).toBe(false);
   });
 
   it("dispatches every tab and pane command to the workspace scope", () => {

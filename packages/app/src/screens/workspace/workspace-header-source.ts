@@ -3,7 +3,15 @@ import type { WorkspaceDescriptor } from "@/stores/session-store";
 export type WorkspaceHeaderCheckoutState =
   | { kind: "pending" }
   | { kind: "error" }
-  | { kind: "ready"; checkout: { isGit: boolean; currentBranch: string | null } };
+  | {
+      kind: "ready";
+      checkout: {
+        isGit: boolean;
+        currentBranch: string | null;
+        /** SVN revision label, such as `r572`, when that working copy is nearest. */
+        vcsLabel?: string | null;
+      };
+    };
 
 type WorkspaceHeaderRenderState =
   | { kind: "skeleton" }
@@ -19,6 +27,7 @@ type WorkspaceHeaderRenderState =
       isSubtitleDistinct: boolean;
       isGitCheckout: boolean;
       currentBranchName: string | null;
+      showsChanges: boolean;
     };
 
 function trimNonEmpty(value: string | null | undefined): string | null {
@@ -61,18 +70,22 @@ export function resolveWorkspaceHeaderRenderState(input: {
 
   const header = resolveWorkspaceHeader({ workspace: input.workspace });
   const checkout = input.checkoutState.kind === "ready" ? input.checkoutState.checkout : null;
-  const currentBranchName =
+  const vcsLabel = trimNonEmpty(checkout?.vcsLabel);
+  const gitBranch =
     checkout?.isGit && checkout.currentBranch !== "HEAD"
       ? trimNonEmpty(checkout.currentBranch)
       : null;
+  const currentBranchName = vcsLabel ?? gitBranch;
+  const isGitCheckout = Boolean(checkout?.isGit) && vcsLabel === null;
 
   return {
     kind: "ready",
     title: header.title,
     subtitle: header.subtitle,
     isSubtitleDistinct: !areHeaderLabelsEquivalent(header.title, header.subtitle),
-    isGitCheckout: checkout?.isGit ?? false,
+    isGitCheckout,
     currentBranchName,
+    showsChanges: isGitCheckout || vcsLabel !== null,
   };
 }
 

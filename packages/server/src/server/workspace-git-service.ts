@@ -36,6 +36,9 @@ import type {
   PullRequestMergeable,
 } from "../services/forge-service.js";
 import { createForgeService } from "../services/forge-registry.js";
+import { loadCheckoutDiff } from "../vcs/checkout-diff.js";
+import { findNearestVcsRoot } from "../vcs/root.js";
+import { readSvnWorkingCopy, type SvnWorkingCopy } from "../vcs/svn.js";
 import {
   createForgeResolver,
   type ForgeResolution,
@@ -171,6 +174,8 @@ export interface WorkspaceGitRuntimeSnapshot {
     hasRemote: boolean;
     diffStat: { additions: number; deletions: number } | null;
   };
+  /** Set when the nearest working copy is SVN. Omitted for git and plain directories. */
+  vcs?: SvnWorkingCopy;
   forge: {
     featuresEnabled: boolean;
     authState: ForgeAuthState;
@@ -431,6 +436,7 @@ interface WorkspaceGitTarget {
   latestGitLoadedAtMs: number | null;
   latestForge: WorkspaceGitRuntimeSnapshot["forge"] | null;
   latestForgeLoadedAtMs: number | null;
+  latestVcs: SvnWorkingCopy | null;
   latestSnapshot: WorkspaceGitRuntimeSnapshot | null;
   latestSnapshotLoadedAtMs: number | null;
   latestFacts: CheckoutSnapshotFacts | null;
@@ -817,9 +823,14 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
       compare: normalizedOptions,
       ...readOptions,
       load: () =>
-        this.deps.getCheckoutDiff(normalizedCwd, normalizedOptions, {
-          paseoHome: this.paseoHome,
-          worktreesRoot: this.worktreesRoot,
+        loadCheckoutDiff({
+          cwd: normalizedCwd,
+          compare: normalizedOptions,
+          readGitDiff: () =>
+            this.deps.getCheckoutDiff(normalizedCwd, normalizedOptions, {
+              paseoHome: this.paseoHome,
+              worktreesRoot: this.worktreesRoot,
+            }),
         }),
     });
   }
@@ -1213,6 +1224,7 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
       latestGitLoadedAtMs: null,
       latestForge: null,
       latestForgeLoadedAtMs: null,
+      latestVcs: null,
       latestSnapshot: null,
       latestSnapshotLoadedAtMs: null,
       latestFacts: null,
@@ -1387,6 +1399,14 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
 
     this.workingTreeWatchTargets.set(cwd, target);
     this.workingTreeWatchAliases.set(cwd, cwd);
+    // A large SVN working copy (an Unreal tree) must not get a recursive
+    // inventory. Status polling lists versioned changes and leaves unversioned
+    // directories as a single row.
+    const nearest = repoRoot === null ? await findNearestVcsRoot(cwd) : null;
+    if (nearest?.kind === "svn") {
+      this.startWorkingTreeWatchFallback(target, "not_a_git_checkout");
+      return target;
+    }
     await this.startWorkingTreeSubscription(target);
     this.assertNotDisposed();
 
@@ -3243,7 +3263,7 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
             request.movedRemoteRefs,
             runRefreshGitCommand,
           );
-          return this.combineSnapshot(target);
+          return this.finishSnapshot(target);
         } catch (error) {
           this.logger.debug(
             { err: error, cwd: target.cwd, movedRemoteRefs: [...request.movedRemoteRefs] },
@@ -3260,7 +3280,7 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
         },
         runRefreshGitCommand,
       );
-      return this.combineSnapshot(target);
+      return this.finishSnapshot(target);
     }
     if (request.refreshStructure || !facts || !target.latestGit) {
       facts = await this.refreshGitSnapshot(target, request, runRefreshGitCommand);
@@ -3274,9 +3294,33 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
       await this.refreshForgeSnapshot(target, request, facts, runRefreshGitCommand);
     }
 
-    const snapshot = this.combineSnapshot(target);
+    return this.finishSnapshot(target);
+  }
+
+  private async finishSnapshot(target: WorkspaceGitTarget): Promise<WorkspaceGitRuntimeSnapshot> {
+    await this.refreshVcsIdentity(target);
     target.latestSnapshotLoadedAtMs = this.deps.now().getTime();
-    return snapshot;
+    return this.combineSnapshot(target);
+  }
+
+  private async refreshVcsIdentity(target: WorkspaceGitTarget): Promise<void> {
+    const nearest = await findNearestVcsRoot(target.cwd);
+    if (nearest?.kind !== "svn") {
+      target.latestVcs = null;
+      return;
+    }
+    try {
+      target.latestVcs = await readSvnWorkingCopy(nearest.root);
+    } catch (error) {
+      this.logger.warn({ err: error, cwd: target.cwd }, "Failed to read SVN working copy");
+      target.latestVcs = {
+        kind: "svn",
+        root: nearest.root,
+        label: "svn",
+        url: null,
+        statusDigest: "",
+      };
+    }
   }
 
   private async refreshRefDerivedSnapshot(
@@ -3453,11 +3497,15 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
       return target.latestSnapshot ?? buildNotGitSnapshot(target.cwd);
     }
 
-    return {
+    const snapshot: WorkspaceGitRuntimeSnapshot = {
       cwd: target.cwd,
       git: target.latestGit,
       forge: target.latestForge ?? buildForgeUnavailableSnapshot(),
     };
+    if (target.latestVcs) {
+      snapshot.vcs = target.latestVcs;
+    }
+    return snapshot;
   }
 
   private getForgePrStatusPollKey(target: WorkspaceGitTarget): string | null {
