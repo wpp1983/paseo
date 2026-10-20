@@ -284,6 +284,7 @@ interface DiffModeMenuProps {
   diffMode: "uncommitted" | "base";
   committedDescription?: string;
   testIDPrefix?: string;
+  allowBase?: boolean;
   onSelectUncommitted: () => void;
   onSelectBase: () => void;
 }
@@ -292,12 +293,24 @@ export function DiffModeMenu({
   diffMode,
   committedDescription,
   testIDPrefix = "changes-diff",
+  allowBase = true,
   onSelectUncommitted,
   onSelectBase,
 }: DiffModeMenuProps) {
   const { t } = useTranslation();
   const uncommittedLabel = t("workspace.git.diff.uncommitted");
   const committedLabel = t("workspace.git.diff.committed");
+  if (!allowBase) {
+    return (
+      <Text
+        style={toolbarLabelTriggerTextStyle(false)}
+        numberOfLines={1}
+        testID={`${testIDPrefix}-status-trigger`}
+      >
+        {uncommittedLabel}
+      </Text>
+    );
+  }
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -460,6 +473,8 @@ interface ChangesPullRequestLinkModel extends Pick<PrHint, "forge" | "number" | 
 
 interface ChangesRepositoryToolbarModel {
   branchName: string | null;
+  branchReadOnly: boolean;
+  branchDetail: string | null;
   cwd: string;
   gitActions: GitActions | null;
   pullRequest: ChangesPullRequestLinkModel | null;
@@ -468,6 +483,7 @@ interface ChangesRepositoryToolbarModel {
 }
 
 interface ChangesComparisonToolbarModel {
+  allowBase: boolean;
   committedDescription?: string;
   diffMode: "uncommitted" | "base";
   mode: ChangesToolbarMode;
@@ -485,6 +501,8 @@ interface ChangesHeaderProps {
 
 interface BuildChangesHeaderModelInput {
   branchName: string | null;
+  branchReadOnly: boolean;
+  branchDetail: string | null;
   committedDescription?: string;
   compact: boolean;
   cwd: string;
@@ -504,18 +522,25 @@ function buildChangesHeaderModel(input: BuildChangesHeaderModelInput): {
   repository: ChangesRepositoryToolbarModel;
   comparison: ChangesComparisonToolbarModel;
 } {
+  const pullRequestHint = input.branchReadOnly ? null : input.pullRequest;
+  const pullRequest = pullRequestHint
+    ? { ...pullRequestHint, onOpen: input.onOpenPullRequest }
+    : null;
+  const hideGitActions = input.branchReadOnly || !input.compact;
+  const gitActions = hideGitActions ? null : input.gitActions;
   return {
     repository: {
       branchName: input.branchName,
+      branchReadOnly: input.branchReadOnly,
+      branchDetail: input.branchDetail,
       cwd: input.cwd,
-      gitActions: input.compact ? input.gitActions : null,
-      pullRequest: input.pullRequest
-        ? { ...input.pullRequest, onOpen: input.onOpenPullRequest }
-        : null,
+      gitActions,
+      pullRequest,
       serverId: input.serverId,
       workspaceId: input.workspaceId,
     },
     comparison: {
+      allowBase: !input.branchReadOnly,
       committedDescription: input.committedDescription,
       diffMode: input.diffMode,
       mode: input.mode,
@@ -637,7 +662,9 @@ function ChangesRepositoryToolbar({
           serverId={model.serverId}
           workspaceId={model.workspaceId ?? model.cwd}
           workspaceDirectory={model.cwd}
-          isGitCheckout
+          isGitCheckout={!model.branchReadOnly}
+          readOnly={model.branchReadOnly}
+          detail={model.branchDetail}
           testID="changes-branch-switcher"
         />
       </ChangesToolbarLeading>
@@ -735,6 +762,7 @@ function ChangesComparisonToolbar({
         <DiffModeMenu
           diffMode={model.diffMode}
           committedDescription={model.committedDescription}
+          allowBase={model.allowBase}
           onSelectUncommitted={model.onSelectUncommitted}
           onSelectBase={model.onSelectBase}
         />
@@ -1359,6 +1387,7 @@ function ChangesBody({
 }
 
 function ChangesCommits({
+  visible,
   presentation,
   serverId,
   cwd,
@@ -1366,6 +1395,7 @@ function ChangesCommits({
   onCommitPress,
   onCollapsedChange,
 }: {
+  visible: boolean;
   presentation: ChangesPresentation;
   serverId: string;
   cwd: string;
@@ -1373,7 +1403,7 @@ function ChangesCommits({
   onCommitPress: (sha: string) => void;
   onCollapsedChange: (collapsed: boolean) => void;
 }) {
-  if (presentation === "diff") return null;
+  if (!visible || presentation === "diff") return null;
   return (
     <CommitsSection
       serverId={serverId}
@@ -1535,6 +1565,7 @@ export function ChangesSurface({
 
   const {
     status,
+    checkout,
     isStatusLoading,
     isGit,
     notGit,
@@ -1711,7 +1742,7 @@ export function ChangesSurface({
       revealTargetName: fileManagerTarget?.label,
       onDownload: handleDownloadPath,
       onDuplicate: fsEntryDuplicateEnabled ? handleDuplicatePath : undefined,
-      onRevert: onRevertPath,
+      onRevert: checkout.readOnly ? undefined : onRevertPath,
     }),
     [
       reviewActions,
@@ -1730,6 +1761,7 @@ export function ChangesSurface({
       fileManagerTarget,
       fsEntryDuplicateEnabled,
       onRevertPath,
+      checkout.readOnly,
     ],
   );
 
@@ -1889,6 +1921,8 @@ export function ChangesSurface({
     () =>
       buildChangesHeaderModel({
         branchName: currentBranchName,
+        branchReadOnly: checkout.readOnly,
+        branchDetail: checkout.url,
         committedDescription: committedDiffDescription,
         compact: isMobile,
         cwd,
@@ -1905,6 +1939,8 @@ export function ChangesSurface({
       }),
     [
       committedDiffDescription,
+      checkout.readOnly,
+      checkout.url,
       currentBranchName,
       cwd,
       diffMode,
@@ -1929,7 +1965,7 @@ export function ChangesSurface({
       }}
       style={styles.container}
     >
-      {isGit ? (
+      {checkout.kind !== "none" ? (
         <ChangesHeader
           compact={isMobile}
           repository={changesHeaderModel.repository}
@@ -1961,6 +1997,7 @@ export function ChangesSurface({
       />
 
       <ChangesCommits
+        visible={isGit}
         presentation={presentation}
         serverId={serverId}
         cwd={cwd}

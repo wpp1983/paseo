@@ -56,6 +56,9 @@ const fileChanges = {
   hunks: (value) => {
     value.hunks = [];
   },
+  change: (value) => {
+    value.change = "conflicted";
+  },
 } satisfies Record<keyof ParsedDiffFile, (value: ParsedDiffFile) => void>;
 type Hunk = ParsedDiffFile["hunks"][number];
 const hunkChanges = {

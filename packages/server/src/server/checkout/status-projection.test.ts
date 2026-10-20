@@ -1,9 +1,10 @@
 import { describe, expect, test } from "vitest";
 
-import { CheckoutPrStatusSchema } from "@getpaseo/protocol/messages";
+import { CheckoutPrStatusSchema, CheckoutStatusResponseSchema } from "@getpaseo/protocol/messages";
 import type { WorkspaceGitRuntimeSnapshot } from "../workspace-git-service.js";
 import {
   buildCheckoutPrStatusPayloadFromSnapshot,
+  buildCheckoutStatusPayloadFromSnapshot,
   normalizeCheckoutPrStatusPayload,
 } from "./status-projection.js";
 
@@ -367,4 +368,88 @@ describe("checkout status projection", () => {
       ciStatus: "success",
     });
   });
+
+  test("puts an SVN working copy on checkout status and leaves the digest off the wire", () => {
+    const snapshot = createPlainSnapshot();
+    snapshot.vcs = {
+      kind: "svn",
+      root: "/wc",
+      label: "r572",
+      url: "https://svn.example/repo/trunk",
+      statusDigest: "secret",
+    };
+
+    const payload = buildCheckoutStatusPayloadFromSnapshot({
+      cwd: "/wc",
+      requestId: "req-svn",
+      snapshot,
+    });
+
+    expect(payload).toMatchObject({
+      isGit: false,
+      currentBranch: null,
+      vcs: {
+        kind: "svn",
+        label: "r572",
+        root: "/wc",
+        url: "https://svn.example/repo/trunk",
+      },
+    });
+    expect(payload.vcs).not.toHaveProperty("statusDigest");
+    expect(
+      CheckoutStatusResponseSchema.parse({ type: "checkout_status_response", payload }),
+    ).toEqual({
+      type: "checkout_status_response",
+      payload,
+    });
+  });
+
+  test("omits vcs for a git checkout", () => {
+    const snapshot = createPlainSnapshot();
+    snapshot.git = {
+      ...snapshot.git,
+      isGit: true,
+      repoRoot: "/repo",
+      currentBranch: "main",
+      isDirty: false,
+    };
+
+    const payload = buildCheckoutStatusPayloadFromSnapshot({
+      cwd: "/repo",
+      requestId: "req-git",
+      snapshot,
+    });
+
+    expect(payload.isGit).toBe(true);
+    expect(payload.currentBranch).toBe("main");
+    expect(payload).not.toHaveProperty("vcs");
+  });
 });
+
+function createPlainSnapshot(): WorkspaceGitRuntimeSnapshot {
+  return {
+    cwd: "/wc",
+    git: {
+      isGit: false,
+      repoRoot: null,
+      mainRepoRoot: null,
+      currentBranch: null,
+      remoteUrl: null,
+      isPaseoOwnedWorktree: false,
+      isDirty: null,
+      baseRef: null,
+      aheadBehind: null,
+      upstreamRef: null,
+      aheadOfOrigin: null,
+      behindOfOrigin: null,
+      hasRemote: false,
+      diffStat: null,
+    },
+    forge: {
+      featuresEnabled: false,
+      authState: "no_remote",
+      pullRequest: null,
+      error: null,
+    },
+  };
+}

@@ -6,6 +6,24 @@ import type {
 import { isGitHubPullRequestStatusFacts } from "../../services/github-facts.js";
 import type { WorkspaceGitRuntimeSnapshot } from "../workspace-git-service.js";
 
+function attachSvnWorkingCopy(
+  payload: CheckoutStatusResponse["payload"],
+  snapshot: WorkspaceGitRuntimeSnapshot,
+): CheckoutStatusResponse["payload"] {
+  if (!snapshot.vcs) {
+    return payload;
+  }
+  return {
+    ...payload,
+    vcs: {
+      kind: snapshot.vcs.kind,
+      label: snapshot.vcs.label,
+      root: snapshot.vcs.root,
+      url: snapshot.vcs.url,
+    },
+  };
+}
+
 type CheckoutPrStatusPayload = Extract<
   SessionOutboundMessage,
   { type: "checkout_pr_status_response" }
@@ -25,23 +43,26 @@ export function buildCheckoutStatusPayloadFromSnapshot({
   snapshot: WorkspaceGitRuntimeSnapshot;
 }): CheckoutStatusResponse["payload"] {
   if (!snapshot.git.isGit) {
-    return {
-      cwd,
-      isGit: false,
-      repoRoot: null,
-      currentBranch: null,
-      isDirty: null,
-      baseRef: null,
-      aheadBehind: null,
-      upstreamRef: null,
-      aheadOfOrigin: null,
-      behindOfOrigin: null,
-      hasRemote: false,
-      remoteUrl: null,
-      isPaseoOwnedWorktree: false,
-      error: null,
-      requestId,
-    };
+    return attachSvnWorkingCopy(
+      {
+        cwd,
+        isGit: false,
+        repoRoot: null,
+        currentBranch: null,
+        isDirty: null,
+        baseRef: null,
+        aheadBehind: null,
+        upstreamRef: null,
+        aheadOfOrigin: null,
+        behindOfOrigin: null,
+        hasRemote: false,
+        remoteUrl: null,
+        isPaseoOwnedWorktree: false,
+        error: null,
+        requestId,
+      },
+      snapshot,
+    );
   }
 
   if (snapshot.git.repoRoot === null || snapshot.git.isDirty === null) {
@@ -53,44 +74,50 @@ export function buildCheckoutStatusPayloadFromSnapshot({
       throw new Error("Workspace git snapshot is missing required worktree status fields");
     }
 
-    return {
+    return attachSvnWorkingCopy(
+      {
+        cwd,
+        isGit: true,
+        repoRoot: snapshot.git.repoRoot,
+        mainRepoRoot: snapshot.git.mainRepoRoot,
+        currentBranch: snapshot.git.currentBranch ?? null,
+        isDirty: snapshot.git.isDirty,
+        baseRef: snapshot.git.baseRef,
+        aheadBehind: snapshot.git.aheadBehind ?? null,
+        upstreamRef: snapshot.git.upstreamRef ?? null,
+        aheadOfOrigin: snapshot.git.aheadOfOrigin ?? null,
+        behindOfOrigin: snapshot.git.behindOfOrigin ?? null,
+        hasRemote: snapshot.git.hasRemote,
+        remoteUrl: snapshot.git.remoteUrl,
+        isPaseoOwnedWorktree: true,
+        error: null,
+        requestId,
+      },
+      snapshot,
+    );
+  }
+
+  return attachSvnWorkingCopy(
+    {
       cwd,
       isGit: true,
       repoRoot: snapshot.git.repoRoot,
       mainRepoRoot: snapshot.git.mainRepoRoot,
       currentBranch: snapshot.git.currentBranch ?? null,
       isDirty: snapshot.git.isDirty,
-      baseRef: snapshot.git.baseRef,
+      baseRef: snapshot.git.baseRef ?? null,
       aheadBehind: snapshot.git.aheadBehind ?? null,
       upstreamRef: snapshot.git.upstreamRef ?? null,
       aheadOfOrigin: snapshot.git.aheadOfOrigin ?? null,
       behindOfOrigin: snapshot.git.behindOfOrigin ?? null,
       hasRemote: snapshot.git.hasRemote,
       remoteUrl: snapshot.git.remoteUrl,
-      isPaseoOwnedWorktree: true,
+      isPaseoOwnedWorktree: false,
       error: null,
       requestId,
-    };
-  }
-
-  return {
-    cwd,
-    isGit: true,
-    repoRoot: snapshot.git.repoRoot,
-    mainRepoRoot: snapshot.git.mainRepoRoot,
-    currentBranch: snapshot.git.currentBranch ?? null,
-    isDirty: snapshot.git.isDirty,
-    baseRef: snapshot.git.baseRef ?? null,
-    aheadBehind: snapshot.git.aheadBehind ?? null,
-    upstreamRef: snapshot.git.upstreamRef ?? null,
-    aheadOfOrigin: snapshot.git.aheadOfOrigin ?? null,
-    behindOfOrigin: snapshot.git.behindOfOrigin ?? null,
-    hasRemote: snapshot.git.hasRemote,
-    remoteUrl: snapshot.git.remoteUrl,
-    isPaseoOwnedWorktree: false,
-    error: null,
-    requestId,
-  };
+    },
+    snapshot,
+  );
 }
 
 export function buildCheckoutPrStatusPayloadFromSnapshot({

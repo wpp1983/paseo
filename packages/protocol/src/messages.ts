@@ -2731,6 +2731,8 @@ const ParsedDiffFileSchema = z.object({
   deletions: z.number(),
   hunks: z.array(DiffHunkSchema),
   status: z.enum(["ok", "too_large", "binary"]).optional(),
+  // SVN working copies set this. Git diffs omit it; older clients ignore it.
+  change: z.enum(["modified", "added", "deleted", "unversioned", "conflicted"]).optional(),
 });
 
 const FileExplorerEntrySchema = z.object({
@@ -5238,6 +5240,16 @@ const CheckoutStatusCommonSchema = z.object({
   // upstream branch name is not necessarily currentBranch, so composing one is wrong.
   // aheadOfOrigin/behindOfOrigin are measured against exactly this ref.
   upstreamRef: z.string().nullable().optional(),
+  // Set only for an SVN working copy. Older clients ignore the optional object
+  // and keep treating the checkout as non-git, so git actions stay unavailable.
+  vcs: z
+    .object({
+      kind: z.literal("svn"),
+      label: z.string(),
+      root: z.string(),
+      url: z.string().nullable(),
+    })
+    .optional(),
 });
 
 const CheckoutStatusNotGitSchema = CheckoutStatusCommonSchema.extend({

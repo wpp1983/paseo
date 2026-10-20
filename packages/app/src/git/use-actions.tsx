@@ -8,6 +8,7 @@ import type { Theme } from "@/styles/theme";
 import { getForgePresentation, type Forge } from "@/git/forge";
 import { ForgeBrandIcon, getForgeBrandColorMapping } from "@/git/forge-icon";
 import { type CheckoutGitActionStatus, useCheckoutGitActionsStore } from "@/git/actions-store";
+import { resolveChangesCheckout } from "@/git/changes-checkout";
 import { type CheckoutStatusPayload, useCheckoutStatusQuery } from "@/git/use-status-query";
 import { type CheckoutPrStatusPayload, useCheckoutPrStatusQuery } from "@/git/use-pr-status-query";
 import {
@@ -205,6 +206,7 @@ interface UseGitActionsResult {
   gitActions: GitActions;
   branchLabel: string;
   isGit: boolean;
+  showsChanges: boolean;
 }
 
 interface UseWorkspaceScreenArchiveControllerInput {
@@ -320,9 +322,10 @@ export function useGitActions({ serverId, cwd, icons }: UseGitActionsInput): Use
   const [shipDefault, setShipDefault] = useState<"merge" | "pr">("pr");
 
   const { status, isLoading: isStatusLoading } = useCheckoutStatusQuery({ serverId, cwd });
-  const gitStatus = status && status.isGit ? status : null;
-  const isGit = Boolean(gitStatus);
-  const notGit = status !== null && !status.isGit && !status.error;
+  const checkout = resolveChangesCheckout(status);
+  const gitStatus = checkout.kind === "git" && status?.isGit ? status : null;
+  const isGit = checkout.kind === "git";
+  const notGit = checkout.kind === "none" && status !== null && !status.error;
   const baseRef = gitStatus?.baseRef ?? undefined;
 
   const hasUncommittedChanges = Boolean(gitStatus?.isDirty);
@@ -342,7 +345,7 @@ export function useGitActions({ serverId, cwd, icons }: UseGitActionsInput): Use
     [baseRef, t],
   );
   const branchLabel = resolveBranchLabel({
-    currentBranch: gitStatus?.currentBranch,
+    currentBranch: checkout.label,
     notGit,
     notRepositoryLabel: t("workspace.git.diff.notRepository"),
     unknownLabel: t("workspace.git.diff.branchUnknown"),
@@ -865,7 +868,7 @@ export function useGitActions({ serverId, cwd, icons }: UseGitActionsInput): Use
     [gitActionsInput, baseRefLabel, hasPullRequest, forge, t],
   );
 
-  return { gitActions, branchLabel, isGit };
+  return { gitActions, branchLabel, isGit, showsChanges: checkout.kind !== "none" };
 }
 
 function translateGitActions(

@@ -10,7 +10,10 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useHostRuntimeClient, useHostRuntimeIsConnected } from "@/runtime/host-runtime";
 import { useToast } from "@/contexts/toast-context";
 import { useBranchSwitcher } from "@/hooks/use-branch-switcher";
-import { ToolbarLabelSelectTrigger } from "@/components/ui/toolbar-label-trigger";
+import {
+  ToolbarLabelSelectTrigger,
+  toolbarLabelTriggerTextStyle,
+} from "@/components/ui/toolbar-label-trigger";
 
 interface BranchSwitcherProps {
   currentBranchName: string | null;
@@ -18,6 +21,9 @@ interface BranchSwitcherProps {
   workspaceId: string;
   workspaceDirectory: string | null;
   isGitCheckout: boolean;
+  /** SVN revisions are a label, not a branch menu. */
+  readOnly?: boolean;
+  detail?: string | null;
   testID?: string;
 }
 
@@ -32,6 +38,8 @@ export function BranchSwitcher({
   workspaceId,
   workspaceDirectory,
   isGitCheckout,
+  readOnly = false,
+  detail = null,
   testID = "workspace-header-branch-switcher",
 }: BranchSwitcherProps) {
   const { t } = useTranslation();
@@ -75,6 +83,31 @@ export function BranchSwitcher({
 
   if (!currentBranchName) {
     return null;
+  }
+
+  if (readOnly) {
+    const tooltip = detail ?? currentBranchName;
+    return (
+      <View ref={anchorRef} collapsable={false} style={styles.anchor}>
+        <Tooltip delayDuration={300} enabledOnDesktop enabledOnMobile={false}>
+          <TooltipTrigger asChild>
+            <Text
+              style={toolbarLabelTriggerTextStyle(false)}
+              numberOfLines={1}
+              testID={testID}
+              accessibilityLabel={t("branchSwitcher.currentBranch", {
+                branchName: currentBranchName,
+              })}
+            >
+              {currentBranchName}
+            </Text>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            <Text style={styles.tooltipText}>{tooltip}</Text>
+          </TooltipContent>
+        </Tooltip>
+      </View>
+    );
   }
 
   return (

@@ -108,6 +108,7 @@ describe("workspace source of truth consumption", () => {
       isSubtitleDistinct: true,
       isGitCheckout: false,
       currentBranchName: null,
+      showsChanges: false,
     });
   });
 
@@ -129,6 +130,7 @@ describe("workspace source of truth consumption", () => {
       isSubtitleDistinct: true,
       isGitCheckout: false,
       currentBranchName: null,
+      showsChanges: false,
     });
   });
 
@@ -148,6 +150,7 @@ describe("workspace source of truth consumption", () => {
       isSubtitleDistinct: true,
       isGitCheckout: true,
       currentBranchName: "feat/workspace-sot",
+      showsChanges: true,
     });
   });
 
@@ -172,6 +175,52 @@ describe("workspace source of truth consumption", () => {
       isSubtitleDistinct: false,
       isGitCheckout: false,
       currentBranchName: null,
+      showsChanges: false,
+    });
+  });
+
+  it("shows an SVN revision in the branch slot and keeps Changes available", () => {
+    expect(
+      resolveWorkspaceHeaderRenderState({
+        workspace: createWorkspaceDescriptor({
+          projectKind: "non_git",
+          workspaceKind: "directory",
+          name: "Unreal",
+          projectDisplayName: "Game",
+        }),
+        checkoutState: {
+          kind: "ready",
+          checkout: { isGit: false, currentBranch: null, vcsLabel: "r572" },
+        },
+      }),
+    ).toEqual({
+      kind: "ready",
+      title: "Unreal",
+      subtitle: "Game",
+      isSubtitleDistinct: true,
+      isGitCheckout: false,
+      currentBranchName: "r572",
+      showsChanges: true,
+    });
+  });
+
+  it("prefers a nearer SVN label over an ancestor git branch", () => {
+    expect(
+      resolveWorkspaceHeaderRenderState({
+        workspace: createWorkspaceDescriptor(),
+        checkoutState: {
+          kind: "ready",
+          checkout: { isGit: true, currentBranch: "main", vcsLabel: " r12 " },
+        },
+      }),
+    ).toEqual({
+      kind: "ready",
+      title: "feat/workspace-sot",
+      subtitle: "getpaseo/paseo",
+      isSubtitleDistinct: true,
+      isGitCheckout: false,
+      currentBranchName: "r12",
+      showsChanges: true,
     });
   });
 
@@ -188,6 +237,7 @@ describe("workspace source of truth consumption", () => {
       isSubtitleDistinct: true,
       isGitCheckout: false,
       currentBranchName: null,
+      showsChanges: false,
     });
   });
 
