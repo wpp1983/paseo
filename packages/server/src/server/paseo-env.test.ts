@@ -64,6 +64,24 @@ describe("paseo env contract", () => {
     expect(env.PATH).toBe("/custom/bin");
   });
 
+  test("preserves color and CI variables for non-terminal external processes", () => {
+    const env = createExternalProcessEnv(
+      {
+        CI: "true",
+        FORCE_COLOR: "0",
+        NO_COLOR: "1",
+        PATH: "/usr/bin",
+      },
+      { CUSTOM: "value" },
+    );
+
+    expect(env.CI).toBe("true");
+    expect(env.FORCE_COLOR).toBe("0");
+    expect(env.NO_COLOR).toBe("1");
+    expect(env.CUSTOM).toBe("value");
+    expect(env.PATH).toBe("/usr/bin");
+  });
+
   test("applies non-control overlays to external process env", () => {
     const env = createExternalProcessEnv(baseEnv, { PATH: "/custom/bin" }, { CUSTOM: "value" });
 

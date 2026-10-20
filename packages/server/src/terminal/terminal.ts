@@ -514,13 +514,80 @@ function prepareZshShellIntegrationRuntimeDir(sourceDir = resolveZshShellIntegra
   return runtimeDir;
 }
 
+// Interactive PTYs are color terminals. NO_COLOR, FORCE_COLOR, and CI inherited
+// from a color-disabled daemon process make Claude Code render plain text.
+// Strip them before input.env so an explicit per-terminal value still wins.
+// Windows env names are case-insensitive, so Term=dumb must not shadow TERM.
+const TERMINAL_INHERITED_COLOR_SUPPRESSION_ENV_KEYS = ["NO_COLOR", "FORCE_COLOR", "CI"] as const;
+const TERMINAL_PTY_ENV_DEFAULTS: Record<string, string> = {
+  TERM: "xterm-256color",
+  TERM_PROGRAM: "kitty",
+  COLORTERM: "truecolor",
+};
+
+function envNamesEqual(left: string, right: string): boolean {
+  if (process.platform === "win32") {
+    return left.toLowerCase() === right.toLowerCase();
+  }
+  return left === right;
+}
+
+function isInheritedTerminalColorSuppressionKey(key: string): boolean {
+  for (const candidate of TERMINAL_INHERITED_COLOR_SUPPRESSION_ENV_KEYS) {
+    if (envNamesEqual(key, candidate)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function withoutInheritedTerminalColorSuppression(
+  env: NodeJS.ProcessEnv,
+): Record<string, string | undefined> {
+  const inherited: Record<string, string | undefined> = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (isInheritedTerminalColorSuppressionKey(key)) {
+      continue;
+    }
+    inherited[key] = value;
+  }
+  return inherited;
+}
+
+function withWindowsTerminalPtyDefaults(env: Record<string, string>): Record<string, string> {
+  if (process.platform !== "win32") {
+    return env;
+  }
+
+  const canonicalKeys = new Map<string, string>();
+  for (const key of Object.keys(TERMINAL_PTY_ENV_DEFAULTS)) {
+    canonicalKeys.set(key.toLowerCase(), key);
+  }
+
+  const normalized: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    const canonicalKey = canonicalKeys.get(key.toLowerCase());
+    if (canonicalKey !== undefined && canonicalKey !== key) {
+      continue;
+    }
+    normalized[key] = value;
+  }
+  for (const [key, value] of Object.entries(TERMINAL_PTY_ENV_DEFAULTS)) {
+    normalized[key] = value;
+  }
+  return normalized;
+}
+
 export function buildTerminalEnvironment(
   input: BuildTerminalEnvironmentInput,
 ): Record<string, string> {
-  const baseEnv: Record<string, string> = createExternalProcessEnv(process.env, input.env, {
-    TERM: "xterm-256color",
-    TERM_PROGRAM: "kitty",
-  });
+  const baseEnv: Record<string, string> = withWindowsTerminalPtyDefaults(
+    createExternalProcessEnv(
+      withoutInheritedTerminalColorSuppression(process.env),
+      input.env,
+      TERMINAL_PTY_ENV_DEFAULTS,
+    ),
+  );
   const envWithAgentHooks = prependPaseoCliToPath(
     baseEnv,
     input.paseoCliBinDir === undefined ? resolvePaseoCliBinDir() : input.paseoCliBinDir,
